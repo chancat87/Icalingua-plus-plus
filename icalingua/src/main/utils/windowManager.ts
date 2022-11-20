@@ -1,5 +1,5 @@
-import { BrowserWindow, globalShortcut, nativeTheme, shell } from 'electron'
-import { clearCurrentRoomUnread, sendOnlineData } from '../ipc/botAndStorage'
+import { BrowserWindow, globalShortcut, nativeTheme, shell, screen } from 'electron'
+import { clearCurrentRoomUnread, getCookies, sendOnlineData } from '../ipc/botAndStorage'
 import { getConfig } from './configManager'
 import getWinUrl from '../../utils/getWinUrl'
 import { updateTrayIcon } from './trayManager'
@@ -7,6 +7,7 @@ import path from 'path'
 import ui from './ui'
 import argv from './argv'
 import { newIcalinguaWindow } from '../../utils/IcalinguaWindow'
+import getStaticPath from '../../utils/getStaticPath'
 
 let loginWindow: BrowserWindow, mainWindow: BrowserWindow, requestWindow: BrowserWindow
 
@@ -60,7 +61,54 @@ export const loadMainWindow = () => {
     )
 
     mainWindow.webContents.setWindowOpenHandler((details) => {
-        shell.openExternal(details.url)
+        if (new URL(details.url).hostname == 'qun.qq.com') {
+            ;(async () => {
+                const size = screen.getPrimaryDisplay().size
+                const win = newIcalinguaWindow({
+                    height: size.height - 200,
+                    width: 500,
+                    autoHideMenuBar: true,
+                    webPreferences: {
+                        contextIsolation: false,
+                        preload: path.join(getStaticPath(), 'homeworkPreload.js'),
+                    },
+                })
+                const cookies = await getCookies('qun.qq.com')
+                for (const i in cookies) {
+                    await win.webContents.session.cookies.set({
+                        url: 'https://qun.qq.com',
+                        name: i,
+                        value: cookies[i],
+                    })
+                }
+
+                await win.loadURL(details.url, { userAgent: 'QQ/8.9.13.9280' })
+            })()
+        } else if (new URL(details.url).hostname == 'docs.qq.com') {
+            ;(async () => {
+                const win1 = newIcalinguaWindow({
+                    autoHideMenuBar: true,
+                })
+                const cookies = await getCookies('docs.qq.com')
+                for (const i in cookies) {
+                    await win1.webContents.session.cookies.set({
+                        url: 'https://docs.qq.com',
+                        name: i,
+                        value: cookies[i],
+                    })
+                }
+                win1.webContents.setWindowOpenHandler((details) => {
+                    return { action: 'deny' }
+                })
+                win1.webContents.on('will-navigate', (event, url) => {
+                    const parsedUrl = new URL(url)
+                    parsedUrl.hostname !== 'docs.qq.com' && event.preventDefault()
+                })
+                await win1.loadURL(details.url, { userAgent: 'QQ/8.9.13.9280' })
+            })()
+        } else {
+            shell.openExternal(details.url)
+        }
         return {
             action: 'deny',
         }
@@ -94,7 +142,7 @@ export const showLoginWindow = (isConfiguringBridge = false) => {
     } else {
         loginWindow = newIcalinguaWindow({
             height: 720,
-            width: 450,
+            width: 550,
             maximizable: false,
             webPreferences: {
                 webSecurity: false,
@@ -165,3 +213,13 @@ export const destroyWindow = () => {
     if (requestWindow && !requestWindow.isDestroyed()) requestWindow.destroy()
 }
 export const getLoginWindow = () => loginWindow
+export const getMainWindowScreen = () => {
+    if (mainWindow) {
+        const bounds = mainWindow.getBounds()
+        return screen.getDisplayNearestPoint({
+            x: bounds.x,
+            y: bounds.y,
+        })
+    }
+    return null
+}

@@ -11,6 +11,7 @@ import SearchableFriend from '@icalingua/types/SearchableFriend'
 import SendMessageParams from '@icalingua/types/SendMessageParams'
 import StorageProvider from '@icalingua/types/StorageProvider'
 import StructMessageCard from '@icalingua/types/StructMessageCard'
+import fs from 'fs'
 import { base64decode } from 'nodejs-base64'
 import {
     Client,
@@ -47,6 +48,7 @@ import {
     SyncMessageEventData,
     SyncReadedEventData,
 } from 'oicq-icalingua-plus-plus'
+import path from 'path'
 import { Socket } from 'socket.io'
 import { config, saveUserConfig, userConfig } from '../providers/configManager'
 import { broadcast } from '../providers/socketIoProvider'
@@ -150,6 +152,15 @@ const eventHandlers = {
         ////process message////
         await processMessage(data.message, message, lastMessage, roomId)
 
+        // 鬼知道服务器改了什么，收到的语言消息有时候没有 url，尝试重新获取
+        if (message.content === '[无法处理的语音]undefined') {
+            const regetMsg = await adapter.getMsg(data.message_id)
+            if (!regetMsg.error && regetMsg.data) {
+                message.content = ''
+                await processMessage(regetMsg.data.message, message, lastMessage, roomId)
+            }
+        }
+
         // 自动回复消息作为小通知短暂显示
         if ('auto_reply' in data && data.auto_reply) {
             clients.message(message.content)
@@ -196,7 +207,11 @@ const eventHandlers = {
         storage.addMessage(roomId, message)
         if (config.custom) {
             if (!bot['sendPrivateMsg']) {
-                bot['sendPrivateMsg'] = async (user_id: number, message: MessageElem[] | string, auto_escape?: boolean) => {
+                bot['sendPrivateMsg'] = async (
+                    user_id: number,
+                    message: MessageElem[] | string,
+                    auto_escape?: boolean,
+                ) => {
                     let custom_room = await storage.getRoom(user_id)
                     if (typeof message === 'string') message = [{ type: 'text', data: { text: message } }]
                     const _message: Message = {
@@ -216,8 +231,16 @@ const eventHandlers = {
                     }
                     if (user_id === bot.uin || user_id === 3636666661) return data
                     _message._id = data.data.message_id
-                    custom_room.utime = new Date().getTime()
-                    _message.time = new Date().getTime()
+                    const parsed = Buffer.from(data.data.message_id, 'base64')
+                    const _time = parsed.readUInt32BE(12)
+                    if (_time !== lastReceivedMessageInfo.timestamp) {
+                        lastReceivedMessageInfo.timestamp = _time
+                        lastReceivedMessageInfo.id = 0
+                    }
+                    custom_room.utime = _time * 1000 + lastReceivedMessageInfo.id
+                    _message.time = _time * 1000 + lastReceivedMessageInfo.id
+                    _message.timestamp = formatDate('hh:mm:ss', new Date(_time * 1000))
+                    lastReceivedMessageInfo.id++
                     clients.updateRoom(custom_room)
                     clients.addMessage(custom_room.roomId, _message)
                     storage.addMessage(user_id, _message)
@@ -252,6 +275,7 @@ const eventHandlers = {
     },
     async friendPoke(data: FriendPokeEventData) {
         const roomId = data.operator_id == bot.uin ? data.user_id : data.operator_id
+        if (await storage.isChatIgnored(roomId)) return
         const room = await storage.getRoom(roomId)
         if (room) {
             room.utime = data.time * 1000
@@ -286,6 +310,7 @@ const eventHandlers = {
         }
     },
     async groupPoke(data: GroupPokeEventData) {
+        if (await storage.isChatIgnored(-data.group_id)) return
         const room = await storage.getRoom(-data.group_id)
         if (room) {
             room.utime = data.time * 1000
@@ -374,9 +399,9 @@ const eventHandlers = {
             content: data.dismiss
                 ? '群解散了'
                 : (data.member ? (data.member.card ? data.member.card : data.member.nickname) : data.user_id) +
-                (data.operator_id === data.user_id
-                    ? ' 离开了本群'
-                    : ` 被 ${operator.card ? operator.card : operator.nickname} 踢了`),
+                  (data.operator_id === data.user_id
+                      ? ' 离开了本群'
+                      : ` 被 ${operator.card ? operator.card : operator.nickname} 踢了`),
             username: data.member
                 ? data.member.card
                     ? data.member.card
@@ -557,8 +582,9 @@ const eventHandlers = {
         const now = new Date(data.time * 1000)
         const operator = (await bot.getGroupMemberInfo(data.group_id, data.operator_id)).data
         const transferredUser = (await bot.getGroupMemberInfo(data.group_id, data.user_id)).data
-        let content = `${operator.card || operator.nickname} 将群转让给了 ${transferredUser.card || transferredUser.nickname
-            }`
+        let content = `${operator.card || operator.nickname} 将群转让给了 ${
+            transferredUser.card || transferredUser.nickname
+        }`
         const message: Message = {
             _id: `transfer-${now.getTime()}-${data.user_id}-${data.operator_id}`,
             content,
@@ -707,10 +733,10 @@ const loginHandlers = {
     verify(data: DeviceEventData) {
         console.log(data)
         bot.sendSMSCode()
-        broadcast('login-smsCodeVerify', data.url)
+        broadcast('login-smsCodeVerify', data)
     },
     qrcode(data: QrcodeEventData) {
-        const url = "data:image/png;base64," + data.image.toString('base64');
+        const url = 'data:image/png;base64,' + data.image.toString('base64')
         broadcast('login-qrcodeLogin', url)
     },
     slider(data: SliderEventData) {
@@ -806,7 +832,7 @@ const attachLoginHandler = () => {
 
 const adapter = {
     async getMsgNewURL(id: string, resolve): Promise<string> {
-        const history = await bot.getMsg(id)
+        const history = await adapter.getMsg(id)
         if (history.error) {
             console.log(history.error)
             if (history.error.message !== 'msg not exists') clients.messageError('错误：' + history.error.message)
@@ -1228,7 +1254,7 @@ const adapter = {
                         const content = base64decode(jsonObj.meta.mannounce.text)
                         room.lastMessage.content = `[${title}]`
                         message.content = title + '\n\n' + content
-                    } catch (err) { }
+                    } catch (err) {}
                 }
                 const biliRegex = /(https?:\\?\/\\?\/b23\.tv\\?\/\w*)\??/
                 const zhihuRegex = /(https?:\\?\/\\?\/\w*\.?zhihu\.com\\?\/[^?"=]*)\??/
@@ -1245,7 +1271,7 @@ const adapter = {
                     try {
                         const meta = (<BilibiliMiniApp>jsonObj).meta.detail_1
                         appurl = meta.qqdocurl
-                    } catch (e) { }
+                    } catch (e) {}
                 }
                 if (appurl) {
                     room.lastMessage.content = ''
@@ -1264,7 +1290,7 @@ const adapter = {
                             url: previewUrl,
                         }
                         message.files.push(message.file)
-                    } catch (e) { }
+                    } catch (e) {}
 
                     room.lastMessage.content += appurl
                     message.content += appurl
@@ -1285,8 +1311,16 @@ const adapter = {
                 room.lastMessage.content = '[DEBUG]' + message.content
             }
             message._id = data.data.message_id
-            room.utime = new Date().getTime()
-            message.time = new Date().getTime()
+            const parsed = Buffer.from(data.data.message_id, 'base64')
+            const _time = parsed.readUInt32BE(12)
+            if (_time !== lastReceivedMessageInfo.timestamp) {
+                lastReceivedMessageInfo.timestamp = _time
+                lastReceivedMessageInfo.id = 0
+            }
+            room.utime = _time * 1000 + lastReceivedMessageInfo.id
+            message.time = _time * 1000 + lastReceivedMessageInfo.id
+            message.timestamp = formatDate('hh:mm:ss', new Date(_time * 1000))
+            lastReceivedMessageInfo.id++
             clients.updateRoom(room)
             clients.addMessage(room.roomId, message)
             storage.addMessage(roomId, message)
@@ -1449,6 +1483,36 @@ const adapter = {
     async hideMessage(roomId: number, messageId: string) {
         await storage.updateMessage(roomId, messageId, { hide: true, reveal: false })
     },
+    async renewMessage(roomId: number, messageId: string, message: Message) {
+        const res = await adapter.getMsg(messageId)
+        if (!res.error) {
+            const data = res.data
+            const newMessage: Message = {
+                senderId: message.senderId,
+                username: message.username,
+                content: '',
+                timestamp: message.timestamp,
+                date: message.date,
+                _id: messageId,
+                time: message.time,
+                role: message.role,
+                title: message.title,
+                files: [],
+                anonymousId: message.anonymousId,
+                anonymousflag: message.anonymousflag,
+            }
+            try {
+                await processMessage(data.message, newMessage, {}, roomId)
+                await storage.replaceMessage(roomId, messageId, newMessage)
+                clients.renewMessage(roomId, messageId, newMessage)
+            } catch (e) {
+                console.error(e)
+            }
+        } else {
+            if (res.error.message !== 'msg not exists') clients.messageError('错误：' + res.error.message)
+            else clients.messageError('错误：该消息不存在。')
+        }
+    },
     async renewMessageURL(roomId: number, messageId: string | number, URL) {
         clients.renewMessageURL(messageId, URL)
         //await storage.updateURL(roomId, messageId, {file: JSON.stringify({ type: 'video/mp4', url: URL })})
@@ -1503,7 +1567,7 @@ const adapter = {
                     messages.push(message)
                     newMsgs.push(message)
                 } catch (e) {
-                    console.log(e)
+                    console.error(e)
                 }
             }
             if (history.data.length < 2) break
@@ -1576,6 +1640,47 @@ const adapter = {
     },
     submitSmsCode(smsCode: string) {
         bot.submitSMSCode(smsCode)
+    },
+    randomDevice(username: number) {
+        const filepath = path.join(require.main ? require.main.path : process.cwd(), 'data', String(username))
+        const devicepath = path.join(filepath, `device-${String(username)}.json`)
+        const randomString = (length: number, num: boolean = false) => {
+            let result = ''
+            const map = num ? '0123456789' : '0123456789abcdef'
+            for (let i = length; i > 0; --i) result += map[Math.floor(Math.random() * map.length)]
+            return result
+        }
+        const device = `{
+        "--begin--":    "该设备文件为尝试解决${username}的风控时随机生成。",
+        "product":      "ILPP-${randomString(5).toUpperCase()}",
+        "device":       "${randomString(5).toUpperCase()}",
+        "board":        "${randomString(5).toUpperCase()}",
+        "brand":        "${randomString(4).toUpperCase()}",
+        "model":        "ILPP ${randomString(4).toUpperCase()}",
+        "wifi_ssid":    "HUAWEI-${randomString(7)}",
+        "bootloader":   "U-boot",
+        "android_id":   "IL.${randomString(7, true)}.${randomString(4, true)}",
+        "boot_id":      "${randomString(8)}-${randomString(4)}-${randomString(4)}-${randomString(4)}-${randomString(
+            12,
+        )}",
+        "proc_version": "Linux version 5.10.101-android12-${randomString(8)}",
+        "mac_address":  "2D:${randomString(2).toUpperCase()}:${randomString(2).toUpperCase()}:${randomString(
+            2,
+        ).toUpperCase()}:${randomString(2).toUpperCase()}:${randomString(2).toUpperCase()}",
+        "ip_address":   "192.168.${randomString(2, true)}.${randomString(2, true)}",
+        "imei":         "86${randomString(13, true)}",
+        "incremental":  "${randomString(10).toUpperCase()}",
+        "--end--":      "修改后可能需要重新验证设备。"
+    }`
+        if (fs.existsSync(filepath)) {
+            fs.rmSync(filepath, { recursive: true, force: true })
+        }
+        fs.mkdirSync(filepath, { recursive: true, mode: 0o755 })
+        fs.writeFileSync(devicepath, device, { mode: 0o600 })
+    },
+    async sendPacket(type: string, cmd: string, body: any, cb) {
+        if (type === 'Uni') cb(await bot.sendUni(cmd, body))
+        else cb(await bot.sendOidb(cmd, body))
     },
 }
 

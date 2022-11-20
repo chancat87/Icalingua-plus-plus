@@ -31,6 +31,10 @@ export default interface Adapter {
 
     getAccount(): LoginForm
 
+    randomDevice(username: number): void
+
+    sendPacket(type: string, cmd: string, body: Object): Promise<Buffer>
+
     clearRoomUnread(roomId: number): any
 
     getUnreadRooms(): Promise<Room[]>
@@ -108,6 +112,8 @@ export default interface Adapter {
     hideMessage(roomId: number, messageId: string): any
 
     revealMessage(roomId: number, messageId: string | number): any
+
+    renewMessage(roomId: number, messageId: string, message: Message): any
 
     renewMessageURL(roomId: number, messageId: string | number, URL: string): any
 

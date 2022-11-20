@@ -52,12 +52,15 @@ export const {
     deleteMessage,
     hideMessage,
     revealMessage,
+    renewMessage,
     renewMessageURL,
     fetchHistory,
     stopFetchingHistory,
     makeForward,
     submitSmsCode,
     reLogin,
+    randomDevice,
+    sendPacket,
 } = adapter
 export const fetchLatestHistory = (roomId: number) => {
     let buffer: Buffer
@@ -85,6 +88,9 @@ export const getCookies = async (domain: CookiesDomain): Promise<Cookies> => {
 }
 
 ipcMain.on('createBot', (event, form: LoginForm) => createBot(form))
+ipcMain.on('randomDevice', (event, username: number) => {
+    randomDevice(username)
+})
 ipcMain.on('submitSmsCode', (event, smsCode: string) => submitSmsCode(smsCode))
 ipcMain.on('QRCodeVerify', (event, url: string) => {
     const veriWin = newIcalinguaWindow({
@@ -98,9 +104,9 @@ ipcMain.on('QRCodeVerify', (event, url: string) => {
     veriWin.webContents.on('did-finish-load', function () {
         veriWin.webContents.executeJavaScript(
             'console.log=(a)=>{' +
-            'if(typeof a === "string"&&' +
-            'a.includes("手Q扫码验证[新设备] - 验证成功页[兼容老版本] - 点击「前往登录QQ」"))' +
-            'window.close()}',
+                'if(typeof a === "string"&&' +
+                'a.includes("手Q扫码验证[新设备] - 验证成功页[兼容老版本] - 点击「前往登录QQ」"))' +
+                'window.close()}',
         )
     })
     veriWin.loadURL(url.replace('safe/verify', 'safe/qrcode'))

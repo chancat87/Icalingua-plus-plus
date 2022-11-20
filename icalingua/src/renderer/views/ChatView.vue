@@ -1,10 +1,6 @@
 <template>
     <div ondragstart="return false;" class="icalingua-theme-holder">
-        <Multipane
-            class="el-main"
-            @paneResize="roomPanelResize"
-            @paneResizeStop="roomPanelResizeStop"
-        >
+        <Multipane class="el-main" @paneResize="roomPanelResize" @paneResizeStop="roomPanelResizeStop">
             <!-- main chat view -->
             <div
                 class="panel rooms-panel"
@@ -54,6 +50,8 @@
                     :linkify="linkify"
                     :account="account"
                     :username="username"
+                    :last-unread-count="lastUnreadCount"
+                    @clear-last-unread-count="clearLastUnreadCount"
                     @send-message="sendMessage"
                     @open-file="openImage"
                     @pokefriend="pokeFriend"
@@ -193,6 +191,8 @@ export default {
             roomPanelAvatarOnly: false,
             roomPanelWidth: undefined,
             forwardShown: false,
+            lastUnreadCount: 0,
+            lastUnreadCheck: 0,
         }
     },
     async created() {
@@ -404,6 +404,13 @@ export default {
                 this.messages = [...this.messages]
             }
         })
+        ipcRenderer.on('renewMessage', (_, {messageId, message}) => {
+            const oldMessageIndex = this.messages.findIndex((e) => e._id === messageId)
+            if (oldMessageIndex !== -1 && message) {
+                this.messages[oldMessageIndex] = message
+                this.messages = [...this.messages]
+            }
+        })
         ipcRenderer.on('renewMessageURL', (_, {messageId, URL}) => {
             const message = this.messages.find((e) => e._id === messageId)
             if (message && URL !== 'error') {
@@ -477,15 +484,26 @@ Chromium ${process.versions.chrome}` : ''
                 ipc.deleteMessage(roomId, resend)
             ipc.sendMessage({content, roomId, file, replyMessage, room, b64img, imgpath, sticker, messageType})
         },
-        async fetchMessage(reset) {
+        clearLastUnreadCount() {
+            this.lastUnreadCount = 0
+        },
+        async fetchMessage(reset, number) {
             if (reset) {
                 this.messagesLoaded = false
                 this.messages = []
             }
             const _roomId = this.selectedRoom.roomId
             const msgs2add = await ipc.fetchMessage(_roomId, this.messages.length)
-            if (_roomId !== this.selectedRoom.roomId) return
+            if (number) {
+                while (msgs2add.filter((e) => !e.system).length < number) {
+                    const msgs = await ipc.fetchMessage(_roomId, this.messages.length + msgs2add.length)
+                    msgs2add.unshift(...msgs)
+                }
+            }
             setTimeout(() => {
+                if (_roomId !== this.selectedRoom.roomId) return
+
+                if (msgs2add.some(e => this.messages.find(e2 => e2._id === e._id))) return
                 if (msgs2add.length) {
                     this.messages = [...msgs2add, ...this.messages]
                 }
@@ -530,6 +548,7 @@ Chromium ${process.versions.chrome}` : ''
         },
         async chroom(room) {
             if (room === 0) {
+                this.lastUnreadCount = 0
                 this.closeRoom()
                 return
             }
@@ -538,6 +557,7 @@ Chromium ${process.versions.chrome}` : ''
             if ((typeof room) === 'number')
                 room = this.rooms.find(e => e.roomId === room)
             if (!room) return
+            this.lastUnreadCount = room.unreadCount
             this.selectedRoom.at = false
             ipc.updateRoom(this.selectedRoom.roomId, { at: false })
             if (this.selectedRoom.roomId === room.roomId) return
@@ -607,6 +627,20 @@ Chromium ${process.versions.chrome}` : ''
             return this.rooms.find(e => e.roomId === this.selectedRoomId) || {roomId: 0}
         },
     },
+    watch: {
+        lastUnreadCount(n, o) {
+            console.log('lastUnreadCount', n)
+            if (n !== 0) {
+                if (this.lastUnreadCheck) {
+                    clearTimeout(this.lastUnreadCheck)
+                }
+                this.lastUnreadCheck = setTimeout(() => {
+                    console.log('Timeout')
+                    this.lastUnreadCount = 0
+                }, 30000)
+            }
+        }
+    }
 }
 </script>
 

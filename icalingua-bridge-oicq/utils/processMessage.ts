@@ -173,6 +173,24 @@ const processMessage = async (oicqMessage: MessageElem[], message: Message, last
 
                     lastMessage.content += appurl
                     message.content += appurl
+                } else if (jsonObj.app === 'com.tencent.groupphoto' || jsonObj.app === 'com.tencent.qzone.albumShare') {
+                    try {
+                        const pics = jsonObj.meta.albumData.pics
+                        pics.forEach((pic: any) => {
+                            let pUrl = pic.url
+                            if (!pUrl.toLowerCase().startsWith('http')) {
+                                pUrl = 'https://' + pUrl
+                            }
+                            message.file = {
+                                type: 'image/jpeg',
+                                url: pUrl,
+                            }
+                            message.files.push(message.file)
+                        })
+                    } catch (e) {}
+
+                    lastMessage.content += '[群相册]' + jsonObj.prompt
+                    message.content += '[群相册]' + jsonObj.prompt
                 } else {
                     lastMessage.content = '[JSON]'
                     message.content = '[JSON]'
@@ -192,7 +210,7 @@ const processMessage = async (oicqMessage: MessageElem[], message: Message, last
                         const resId = m.data.data.match(resIdRegex)[1]
                         console.log(resId)
                         message.content = `[Forward: ${resId}]`
-                    } else if (fileNameRegex.test(m.data.data)){
+                    } else if (fileNameRegex.test(m.data.data)) {
                         const fileName = m.data.data.match(fileNameRegex)[1]
                         console.log(fileName)
                         message.content = `[NestedForward: ${fileName}]`

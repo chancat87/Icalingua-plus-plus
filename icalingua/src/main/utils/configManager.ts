@@ -39,6 +39,9 @@ type AllConfig = {
     custom: boolean
     fetchHistoryOnStart: boolean
     showAppMenu: boolean
+    optimizeMethod: string
+    silentFetchHistory: boolean
+    hideChatImageByDefault: boolean
 }
 
 const configFilePath = argv.config || path.join(app.getPath('userData'), 'config.yaml')
@@ -109,6 +112,9 @@ const defaultConfig: AllConfig = {
     custom: false,
     fetchHistoryOnStart: false,
     showAppMenu: true,
+    optimizeMethod: 'infinite-loading',
+    silentFetchHistory: false,
+    hideChatImageByDefault: false,
 }
 if (!fs.existsSync(configFilePath) && fs.existsSync(oldConfigFilePath)) {
     migrateData()

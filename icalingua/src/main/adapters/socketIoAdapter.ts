@@ -13,8 +13,8 @@ import { app, dialog, Notification as ElectronNotification } from 'electron'
 import fileType from 'file-type'
 import { Notification } from 'freedesktop-notifications'
 import fs from 'fs'
-import { sign } from 'noble-ed25519'
-import { FakeMessage, FileElem, GroupInfo, MemberInfo } from 'oicq-icalingua-plus-plus'
+import { sign } from '@noble/ed25519'
+import { DeviceEventData, FakeMessage, FileElem, GroupInfo, MemberInfo } from 'oicq-icalingua-plus-plus'
 import path from 'path'
 import { io, Socket } from 'socket.io-client'
 import formatDate from '../../utils/formatDate'
@@ -34,7 +34,7 @@ import { getMainWindow, loadMainWindow, sendToLoginWindow, showLoginWindow, show
 
 // 这是所对应服务端协议的版本号，如果协议有变动比如说调整了 API 才会更改。
 // 如果只是功能上的变动的话就不会改这个版本号，混用协议版本相同的服务端完全没有问题
-const EXCEPTED_PROTOCOL_VERSION = '2.2.4'
+const EXCEPTED_PROTOCOL_VERSION = '2.2.8'
 
 let socket: Socket
 let uin = 0
@@ -114,6 +114,12 @@ const attachSocketEvents = () => {
     socket.on('closeLoading', ui.closeLoading)
     socket.on('notifyError', ui.notifyError)
     socket.on('revealMessage', ui.revealMessage)
+    socket.on(
+        'renewMessage',
+        ({ roomId, messageId, message }: { roomId: number; messageId: string; message: Message }) => {
+            ui.renewMessage(roomId, messageId, message)
+        },
+    )
     socket.on('renewMessageURL', ({ messageId, URL }: { messageId: string | number; URL: string }) => {
         ui.renewMessageURL(messageId, URL)
     })
@@ -256,9 +262,9 @@ const attachSocketEvents = () => {
     socket.on('login-qrcodeLogin', (url: string) => {
         sendToLoginWindow('qrcodeLogin', url)
     })
-    socket.on('login-smsCodeVerify', (url: string) => {
+    socket.on('login-smsCodeVerify', (data: DeviceEventData) => {
         showLoginWindow(true)
-        sendToLoginWindow('smsCodeVerify', url)
+        sendToLoginWindow('smsCodeVerify', data)
     })
     socket.on('login-error', (message: string) => {
         sendToLoginWindow('error', message)
@@ -425,6 +431,9 @@ const adapter: Adapter = {
             })
         }
     },
+    randomDevice(username: number) {
+        socket.emit('randomDevice', username)
+    },
     submitSmsCode(smsCode: string) {
         socket.emit('submitSmsCode', smsCode)
     },
@@ -499,6 +508,9 @@ const adapter: Adapter = {
     revealMessage(roomId: number, messageId: string | number) {
         socket.emit('revealMessage', roomId, messageId)
     },
+    renewMessage(roomId: number, messageId: string, message: Message) {
+        socket.emit('renewMessage', roomId, messageId, message)
+    },
     renewMessageURL(roomId: number, messageId: string | number, URL: string) {
         socket.emit('renewMessageURL', roomId, messageId, URL)
     },
@@ -564,6 +576,11 @@ const adapter: Adapter = {
     },
     handleRequest(type: 'friend' | 'group', flag: string, accept?: boolean): any {
         socket.emit('handleRequest', type, flag, accept)
+    },
+    sendPacket(type: string, cmd: string, body: Object): Promise<Buffer> {
+        return new Promise((resolve, reject) => {
+            socket.emit('sendPacket', type, cmd, body, resolve)
+        })
     },
 }
 

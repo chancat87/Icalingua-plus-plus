@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -32,10 +32,10 @@ jobs:
       run:
         working-directory: icalingua
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: pkgres
           path: pkgres/*
@@ -49,7 +49,7 @@ jobs:
       arch-version: ${{ steps.version.outputs.arch-version }}
       pkg-name: ${{ steps.version.outputs.pkg-name }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -58,17 +58,6 @@ jobs:
 
       - name: Install pnpm
         run: corepack enable
-
-      - id: git-ver
-        run: echo ::set-output name=version::$(git describe --tags | sed "s/v//")
-
-      - name: check version and write version info
-        run: node .github/check-version.js
-        id: version
-        env:
-          SHA: ${{ github.sha }}
-          REF: ${{ github.REF }}
-          GIT_VER: ${{ steps.git-ver.outputs.version }}
 
       - name: Cache pnpm and node-modules
         uses: Icalinguaplusplus/node-pm-action@master
@@ -79,12 +68,23 @@ jobs:
       - name: pnpm install
         run: pnpm install
 
+      - id: git-ver
+        run: echo "version=$(git describe --tags | sed "s/v//")" >> $GITHUB_OUTPUT
+
+      - name: check version and write version info
+        run: node .github/check-version.js
+        id: version
+        env:
+          SHA: ${{ github.sha }}
+          REF: ${{ github.REF }}
+          GIT_VER: ${{ steps.git-ver.outputs.version }}
+
       - name: build
         run: pnpm build:ci
         working-directory: icalingua
 
       - name: upload dist
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: dist
           path: icalingua/dist
@@ -95,13 +95,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-dist-bundle
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
 
       - name: get dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: dist
           path: icalingua/dist
@@ -126,14 +126,14 @@ jobs:
         run: pnpm build:electron --dir -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
         working-directory: icalingua
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload app-x86_64.asar
         with:
           name: app-x86_64.asar
           path: icalingua/build/linux-unpacked/resources/app.asar
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload x86_64
         with:
           name: x86_64-unpacked
@@ -144,7 +144,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-dist-bundle
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -162,7 +162,7 @@ jobs:
         run: pnpm install
 
       - name: get dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: dist
           path: icalingua/dist
@@ -181,14 +181,14 @@ jobs:
         run: pnpm build:electron --ia32 --dir -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
         working-directory: icalingua
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload app.asar
         with:
           name: app-ia32.asar
           path: icalingua/build/linux-ia32-unpacked/resources/app.asar
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload unpacked
         with:
           name: ia32-unpacked
@@ -199,7 +199,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-dist-bundle
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -217,19 +217,20 @@ jobs:
         run: pnpm install
 
       - name: get dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: dist
           path: icalingua/dist
 
-      - uses: uraimo/run-on-arch-action@v2.1.1
+      - uses: uraimo/run-on-arch-action@v2.3.0
         name: build native modules using another arch
         with:
           arch: aarch64
           distro: ubuntu20.04
           githubToken: ${{ github.token }}
           dockerRunArgs: |
-            --volume "${PWD}/icalingua:/build"
+            --volume "${PWD}:/build"
+            --volume "/home/runner:/home/runner"
           install: |
             apt-get update && apt-get install -y gnupg2 && apt-get install curl -y
             curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
@@ -239,22 +240,22 @@ jobs:
           run: |
             uname -a
             chmod -R 777 /build
-            cd /build
-            useradd -m builduser
-            su builduser -c 'pnpm install && pnpm build:electron install-app-deps'
+            cd /build/icalingua
+            pnpm config set store-dir /home/runner/.local/share/pnpm/store/v3
+            pnpm build:electron install-app-deps
 
       - name: build
         run: pnpm build:electron --arm64 --dir -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
         working-directory: icalingua
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload app.asar
         with:
           name: app-arm64.asar
           path: icalingua/build/linux-arm64-unpacked/resources/app.asar
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload unpacked
         with:
           name: arm64-unpacked
@@ -265,7 +266,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-dist-bundle
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -283,19 +284,20 @@ jobs:
         run: pnpm install
 
       - name: get dist
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: dist
           path: icalingua/dist
 
-      - uses: uraimo/run-on-arch-action@v2.1.1
+      - uses: uraimo/run-on-arch-action@v2.3.0
         name: build native modules using another arch
         with:
           arch: armv7
           distro: ubuntu20.04
           githubToken: ${{ github.token }}
           dockerRunArgs: |
-            --volume "${PWD}/icalingua:/build"
+            --volume "${PWD}:/build"
+            --volume "/home/runner:/home/runner"
           install: |
             apt-get update && apt-get install -y gnupg2 && apt-get install curl -y
             curl -fsSL https://deb.nodesource.com/setup_16.x | bash -
@@ -305,22 +307,22 @@ jobs:
           run: |
             uname -a
             chmod -R 777 /build
-            cd /build
-            useradd -m builduser
-            su builduser -c 'pnpm install && pnpm build:electron install-app-deps'
+            cd /build/icalingua
+            pnpm config set store-dir /home/runner/.local/share/pnpm/store/v3
+            pnpm build:electron install-app-deps
 
       - name: build
         run: pnpm build:electron --armv7l --dir -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
         working-directory: icalingua
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload app.asar
         with:
           name: app-armv7l.asar
           path: icalingua/build/linux-armv7l-unpacked/resources/app.asar
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload unpacked
         with:
           name: armv7l-unpacked
@@ -335,7 +337,7 @@ jobs:
       - build-dist-bundle
     steps:
       - name: get the assets
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: pkgres
 
@@ -344,7 +346,7 @@ jobs:
         run: sed 's/VERSION/${{ needs.build-dist-bundle.outputs.arch-version }}/;s/ARCH/x86_64/' ${{ needs.build-dist-bundle.outputs.pkg-name }}.PKGBUILD.template > PKGBUILD
 
       - name: get binary for x86_64
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-x86_64.asar
 
@@ -358,9 +360,9 @@ jobs:
           updpkgsums: true
 
       - id: pkgname
-        run: echo ::set-output name=pkgname::$(ls *-x86_64.pkg.*)
+        run: echo "pkgname=$(ls *-x86_64.pkg.*)" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload x86_64
         with:
           name: x86_64.pkg.tar.zst
@@ -381,7 +383,7 @@ jobs:
       - build-ia32
     steps:
       - name: get the assets
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: pkgres
 
@@ -390,7 +392,7 @@ jobs:
         run: sed 's/VERSION/${{ needs.build-dist-bundle.outputs.arch-version }}/;s/ARCH/i686/' ${{ needs.build-dist-bundle.outputs.pkg-name }}.PKGBUILD.template > PKGBUILD
 
       - name: get binary for i686
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-ia32.asar
 
@@ -405,9 +407,9 @@ jobs:
           updpkgsums: true
 
       - id: pkgname
-        run: echo ::set-output name=pkgname::$(ls *-i686.pkg.*)
+        run: echo "pkgname=$(ls *-i686.pkg.*)" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload i686
         with:
           name: i686.pkg.tar.zst
@@ -428,7 +430,7 @@ jobs:
       - build-arm64
     steps:
       - name: get the assets
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: pkgres
 
@@ -437,7 +439,7 @@ jobs:
         run: sed 's/VERSION/${{ needs.build-dist-bundle.outputs.arch-version }}/;s/ARCH/aarch64/' ${{ needs.build-dist-bundle.outputs.pkg-name }}.PKGBUILD.template > PKGBUILD
 
       - name: get binary for aarch64
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-arm64.asar
 
@@ -452,9 +454,9 @@ jobs:
           updpkgsums: true
 
       - id: pkgname
-        run: echo ::set-output name=pkgname::$(ls *-aarch64.pkg.*)
+        run: echo "pkgname=$(ls *-aarch64.pkg.*)" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload aarch64
         with:
           name: aarch64.pkg.tar.zst
@@ -475,7 +477,7 @@ jobs:
       - build-armv7l
     steps:
       - name: get the assets
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: pkgres
 
@@ -484,7 +486,7 @@ jobs:
         run: sed 's/VERSION/${{ needs.build-dist-bundle.outputs.arch-version }}/;s/ARCH/armv7l/' ${{ needs.build-dist-bundle.outputs.pkg-name }}.PKGBUILD.template > PKGBUILD
 
       - name: get binary for armv7l
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-armv7l.asar
 
@@ -499,9 +501,9 @@ jobs:
           updpkgsums: true
 
       - id: pkgname
-        run: echo ::set-output name=pkgname::$(ls *-armv7l.pkg.*)
+        run: echo "pkgname=$(ls *-armv7l.pkg.*)" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload armv7l
         with:
           name: armv7l.pkg.tar.zst
@@ -523,7 +525,7 @@ jobs:
       run:
         working-directory: icalingua
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -541,7 +543,7 @@ jobs:
         run: pnpm install
 
       - name: get built files
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64-unpacked
           path: icalingua/unpacked
@@ -563,11 +565,11 @@ jobs:
         id: pack
         run: |
           sg lxd -c 'pnpm build:electron --pd unpacked -l snap -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }} -p never'
-          echo "::set-output name=snap::$(readlink -f $(ls build/*.snap))"
+          echo "snap=$(readlink -f $(ls build/*.snap))" >> $GITHUB_OUTPUT
         env:
           SNAPCRAFT_BUILD_ENVIRONMENT: lxd
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload snap
         with:
           name: x86_64.snap
@@ -590,7 +592,7 @@ jobs:
       run:
         working-directory: icalingua
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -608,7 +610,7 @@ jobs:
         run: pnpm install
 
       - name: get built files
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64-unpacked
           path: icalingua/unpacked
@@ -619,7 +621,7 @@ jobs:
       - name: pack
         run: pnpm build:electron --pd unpacked -l ${{ matrix.package }} -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload ${{ matrix.package }}
         with:
           name: x86_64.${{ matrix.package }}
@@ -642,7 +644,7 @@ jobs:
       run:
         working-directory: icalingua
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -660,7 +662,7 @@ jobs:
         run: pnpm install
 
       - name: get built files
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ia32-unpacked
           path: icalingua/unpacked
@@ -671,7 +673,7 @@ jobs:
       - name: pack
         run: pnpm build:electron --pd unpacked --ia32 -l ${{ matrix.package }} -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload ${{ matrix.package }}
         with:
           name: ia32.${{ matrix.package }}
@@ -694,7 +696,7 @@ jobs:
       run:
         working-directory: icalingua
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -712,7 +714,7 @@ jobs:
         run: pnpm install
 
       - name: get built files
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: arm64-unpacked
           path: icalingua/unpacked
@@ -723,7 +725,7 @@ jobs:
       - name: pack
         run: pnpm build:electron --pd unpacked --arm64 -l ${{ matrix.package }} -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload ${{ matrix.package }}
         with:
           name: arm64.${{ matrix.package }}
@@ -746,7 +748,7 @@ jobs:
       run:
         working-directory: icalingua
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -764,7 +766,7 @@ jobs:
         run: pnpm install
 
       - name: get built files
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: armv7l-unpacked
           path: icalingua/unpacked
@@ -775,7 +777,7 @@ jobs:
       - name: pack
         run: pnpm build:electron --pd unpacked --armv7l -l ${{ matrix.package }} -c.extraMetadata.version=${{ needs.build-dist-bundle.outputs.version }}
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: upload ${{ matrix.package }}
         with:
           name: armv7l.${{ matrix.package }}
@@ -798,22 +800,22 @@ jobs:
       - pack-archpkg-aarch64
       - pack-archpkg-armv7l
     steps:
-      - uses: geekyeggo/delete-artifact@v1
+      - uses: geekyeggo/delete-artifact@v2
         with:
           name: dist
-      - uses: geekyeggo/delete-artifact@v1
+      - uses: geekyeggo/delete-artifact@v2
         with:
           name: x86_64-unpacked
-      - uses: geekyeggo/delete-artifact@v1
+      - uses: geekyeggo/delete-artifact@v2
         with:
           name: ia32-unpacked
-      - uses: geekyeggo/delete-artifact@v1
+      - uses: geekyeggo/delete-artifact@v2
         with:
           name: arm64-unpacked
-      - uses: geekyeggo/delete-artifact@v1
+      - uses: geekyeggo/delete-artifact@v2
         with:
           name: armv7l-unpacked
-      - uses: geekyeggo/delete-artifact@v1
+      - uses: geekyeggo/delete-artifact@v2
         with:
           name: pkgres
 
@@ -824,7 +826,7 @@ jobs:
         working-directory: icalingua-bridge-oicq
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -845,7 +847,7 @@ jobs:
         run: pnpm compile
 
       - name: upload artifacts
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: bridge-oicq
           path: icalingua-bridge-oicq/build/
@@ -858,7 +860,7 @@ jobs:
       arch-version: ${{ steps.version.outputs.arch-version }}
       pkg-name: ${{ steps.version.outputs.pkg-name }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -870,8 +872,11 @@ jobs:
       - name: Install pnpm
         run: corepack enable
 
+      - name: pnpm install
+        run: pnpm install
+
       - id: git-ver
-        run: echo "::set-output name=version::$(git describe --tags | sed 's/v//')"
+        run: echo "version=$(git describe --tags | sed 's/v//')" >> $env:GITHUB_OUTPUT
 
       - name: check version and write version info
         run: node .github/check-version.js
@@ -881,9 +886,6 @@ jobs:
           REF: ${{ github.REF }}
           GIT_VER: ${{ steps.git-ver.outputs.version }}
 
-      - name: pnpm install
-        run: pnpm install
-
       - name: build
         run: pnpm build
         working-directory: icalingua
@@ -892,7 +894,7 @@ jobs:
         run: ../../.github/winrename.bat x64
         working-directory: icalingua/build
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: Upload Icalingua_Windows64.exe
         with:
           name: Icalingua_Windows64.exe
@@ -906,7 +908,7 @@ jobs:
       arch-version: ${{ steps.version.outputs.arch-version }}
       pkg-name: ${{ steps.version.outputs.pkg-name }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -918,8 +920,17 @@ jobs:
       - name: Install pnpm
         run: corepack enable
 
+      - name: Fetch node.lib and pnpm install
+        shell: cmd
+        run: |
+          set npm_config_arch=arm64
+          set node_version=16.13.0
+          mkdir %APPDATA%\..\Local\node-gyp\Cache\%node_version%\arm64
+          curl -Lo %APPDATA%\..\Local\node-gyp\Cache\%node_version%\arm64\node.lib https://unofficial-builds.nodejs.org/download/release/v%node_version%/win-arm64/node.lib
+          pnpm install
+
       - id: git-ver
-        run: echo "::set-output name=version::$(git describe --tags | sed 's/v//')"
+        run: echo "version=$(git describe --tags | sed 's/v//')" >> $env:GITHUB_OUTPUT
 
       - name: check version and write version info
         run: node .github/check-version.js
@@ -944,7 +955,7 @@ jobs:
         run: ../../.github/winrename.bat arm64
         working-directory: icalingua/build
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: Upload Icalingua_Windows_arm64.exe
         with:
           name: Icalingua_Windows_arm64.exe
@@ -958,7 +969,7 @@ jobs:
         working-directory: icalingua
 
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - name: Setup Node.js environment
         uses: actions/setup-node@v3
@@ -985,7 +996,7 @@ jobs:
       arch-version: ${{ steps.version.outputs.arch-version }}
       pkg-name: ${{ steps.version.outputs.pkg-name }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
 
@@ -1003,8 +1014,11 @@ jobs:
           node-modules: ./node_modules
           package-manager: pnpm
 
+      - name: pnpm install
+        run: pnpm install
+
       - id: git-ver
-        run: echo "::set-output name=version::$(git describe --tags | sed 's/v//')"
+        run: echo "version=$(git describe --tags | sed "s/v//")" >> $GITHUB_OUTPUT
 
       - name: check version and write version info
         run: node .github/check-version.js
@@ -1014,9 +1028,6 @@ jobs:
           REF: ${{ github.REF }}
           GIT_VER: ${{ steps.git-ver.outputs.version }}
 
-      - name: pnpm install
-        run: pnpm install
-
       - name: build
         run: pnpm build
         working-directory: icalingua
@@ -1025,7 +1036,7 @@ jobs:
         run: for i in *.dmg;do mv "$i" "${i%.dmg}_x64.dmg" ;done
         working-directory: icalingua/build
 
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v3
         name: Upload Icalingua++_x64.dmg
         with:
           name: Icalingua++_x64.dmg
@@ -1054,7 +1065,7 @@ jobs:
         run: mkdir release
 
       - name: get app-x86_64.asar
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-x86_64.asar
 
@@ -1062,7 +1073,7 @@ jobs:
         run: mv app.asar release/app-x86_64.asar
 
       - name: get app-ia32.asar
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-ia32.asar
 
@@ -1070,7 +1081,7 @@ jobs:
         run: mv app.asar release/app-ia32.asar
 
       - name: get app-arm64.asar
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-arm64.asar
 
@@ -1078,7 +1089,7 @@ jobs:
         run: mv app.asar release/app-arm64.asar
 
       - name: get app-armv7l.asar
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: app-armv7l.asar
 
@@ -1086,139 +1097,139 @@ jobs:
         run: mv app.asar release/app-armv7l.asar
 
       - name: get aarch64.pkg.tar.zst
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: aarch64.pkg.tar.zst
           path: release
 
       - name: get arm64.AppImage
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: arm64.AppImage
           path: release
 
       - name: get arm64.deb
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: arm64.deb
           path: release
 
       - name: get arm64.rpm
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: arm64.rpm
           path: release
 
       - name: get arm64.tar.xz
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: arm64.tar.xz
           path: release
 
       - name: get armv7l.AppImage
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: armv7l.AppImage
           path: release
 
       - name: get armv7l.deb
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: armv7l.deb
           path: release
 
       - name: get armv7l.rpm
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: armv7l.rpm
           path: release
 
       - name: get armv7l.tar.xz
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: armv7l.tar.xz
           path: release
 
       - name: get i686.pkg.tar.zst
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: i686.pkg.tar.zst
           path: release
 
       - name: get ia32.AppImage
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ia32.AppImage
           path: release
 
       - name: get ia32.tar.xz
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ia32.tar.xz
           path: release
 
       - name: get ia32.deb
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ia32.deb
           path: release
 
       - name: get ia32.rpm
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: ia32.rpm
           path: release
 
       - name: get x86_64.AppImage
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64.AppImage
           path: release
 
       - name: get x86_64.snap
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64.snap
           path: release
 
       - name: get x86_64.tar.xz
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64.tar.xz
           path: release
 
       - name: get x86_64.deb
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64.deb
           path: release
 
       - name: get x86_64.pkg.tar.zst
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64.pkg.tar.zst
           path: release
 
       - name: get x86_64.rpm
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: x86_64.rpm
           path: release
 
       - name: get Icalingua_Windows64.exe
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: Icalingua_Windows64.exe
           path: release
 
       - name: get Icalingua_Windows_arm64.exe
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: Icalingua_Windows_arm64.exe
           path: release
 
       - name: get Icalingua++_x64.dmg
-        uses: actions/download-artifact@v2
+        uses: actions/download-artifact@v3
         with:
           name: Icalingua++_x64.dmg
           path: release

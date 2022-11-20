@@ -45,12 +45,32 @@
                     </transition>
                     <transition name="vac-fade-message">
                         <infinite-loading
-                            v-if="messages.length"
+                            v-if="messages.length && optimizeMethod === 'none'"
                             :class="{ 'vac-infinite-loading': !messagesLoaded }"
                             spinner="spiral"
                             direction="top"
                             :distance="40"
-                            @infinite="loadMoreMessages"
+                            @infinite="_loadMoreMessages"
+                        >
+                            <div slot="spinner">
+                                <loader :show="true" :infinite="true" />
+                            </div>
+                            <div slot="no-results" />
+                            <div slot="no-more" />
+                        </infinite-loading>
+                    </transition>
+                    <transition name="vac-fade-message">
+                        <infinite-loading
+                            v-if="
+                                messages.length &&
+                                optimizeMethod === 'infinite-loading' &&
+                                !(messagesLoaded && visibleViewport.head === 0)
+                            "
+                            :class="{ 'vac-infinite-loading': !(messagesLoaded && visibleViewport.head === 0) }"
+                            spinner="spiral"
+                            direction="top"
+                            :distance="40"
+                            @infinite="loadHeadMessages"
                         >
                             <div slot="spinner">
                                 <loader :show="true" :infinite="true" />
@@ -60,11 +80,15 @@
                         </infinite-loading>
                     </transition>
                     <transition-group :key="roomId" name="vac-fade-message">
-                        <div v-for="(m, i) in messages" :key="m._id" @dblclick="replyMessage(m, $event)">
+                        <div
+                            v-for="(m, i) in messages.slice(visibleViewport.head, visibleViewport.tail)"
+                            :key="m._id"
+                            @dblclick="replyMessage(m, $event)"
+                        >
                             <message
                                 :current-user-id="currentUserId"
                                 :message="m"
-                                :index="i"
+                                :index="i + visibleViewport.head"
                                 :messages="messages"
                                 :edited-message="editedMessage"
                                 :message-actions="messageActions"
@@ -80,6 +104,7 @@
                                 :selectedMessage="selectedMessage"
                                 :linkify="linkify"
                                 :forward-res-id="forwardResId"
+                                :msgstoForward="msgstoForward"
                                 @open-file="openFile"
                                 @add-new-message="addNewMessage"
                                 @ctx="msgctx(m)"
@@ -90,6 +115,8 @@
                                 @start-chat="(e, f) => $emit('start-chat', e, f)"
                                 @add-msg-to-forward="addMsgtoForward"
                                 @del-msg-to-forward="delMsgtoForward"
+                                @scroll-to-message="scrollToMessage"
+                                :hide-chat-image-by-default="hideChatImageByDefault"
                             >
                                 <template v-for="(index, name) in $scopedSlots" #[name]="data">
                                     <slot :name="name" v-bind="data" />
@@ -97,12 +124,44 @@
                             </message>
                         </div>
                     </transition-group>
+                    <transition name="vac-fade-message">
+                        <infinite-loading
+                            v-if="visibleViewport.tail !== messages.length && optimizeMethod === 'infinite-loading'"
+                            :class="{ 'vac-infinite-loading-bottom': visibleViewport.tail !== messages.length }"
+                            spinner="spiral"
+                            direction="bottom"
+                            :distance="100"
+                            @infinite="loadTailMessages"
+                        >
+                            <div slot="spinner">
+                                <loader :show="true" :infinite="true" />
+                            </div>
+                            <div slot="no-results" />
+                            <div slot="no-more" />
+                        </infinite-loading>
+                    </transition>
                 </div>
             </div>
         </div>
         <div v-if="!loadingMessages">
             <transition name="vac-bounce">
-                <div v-if="scrollIcon" class="vac-icon-scroll" @click="scrollToBottom">
+                <div v-if="lastUnreadCount >= 10" class="vac-icon-last-message" @click="scrollToLastMessage">
+                    <transition name="vac-bounce">
+                        <div v-if="lastUnreadCount" class="vac-badge-counter vac-messages-count">
+                            {{ lastUnreadCount }}
+                        </div>
+                    </transition>
+                    <slot name="scroll-icon">
+                        <svg-icon name="dropdown" style="transform: rotate(180deg)" />
+                    </slot>
+                </div>
+            </transition>
+            <transition name="vac-bounce">
+                <div
+                    v-if="scrollIcon || (visibleViewport.tail !== messages.length && messages.length !== 0)"
+                    class="vac-icon-scroll"
+                    @click="scrollToBottom"
+                >
                     <transition name="vac-bounce">
                         <div v-if="scrollMessagesCount" class="vac-badge-counter vac-messages-count">
                             {{ scrollMessagesCount }}
@@ -331,6 +390,9 @@ import ipc from '../../../../utils/ipc'
 /** @type 'Enter'|'CtrlEnter'|'ShiftEnter' */
 let keyToSendMessage
 
+// scroll
+const scrollOffset = 300
+
 export default {
     name: 'Room',
     components: {
@@ -376,15 +438,16 @@ export default {
         account: { type: Number, required: true },
         username: { type: String, required: true },
         forwardResId: { type: String, required: false },
+        hideChatImageByDefault: { type: Boolean, required: false, default: false },
+        lastUnreadCount: { type: Number, required: false, default: 0 },
     },
     data() {
         return {
             message: '',
             editedMessage: {},
             messageReply: null,
-            infiniteState: null,
             loadingMessages: false,
-            loadingMoreMessages: false,
+            loadingHeadMessages: false,
             file: null,
             imageFile: null,
             videoFile: null,
@@ -407,6 +470,21 @@ export default {
             groupMembers: null,
             useAtKey: false,
             selectedMessage: '',
+            visibleViewport: {
+                head: 0,
+                tail: 0,
+            },
+            onScrolling: null,
+            lastScrollPosition: {
+                top: 0,
+                bottom: 0,
+            },
+            infiniteState: {
+                head: null,
+                tail: null,
+            },
+            optimizeMethod: 'infinite-loading',
+            scrollingTolastMessage: 0,
         }
     },
     computed: {
@@ -421,37 +499,81 @@ export default {
             return this.room.roomId && !this.messages.length && !this.loadingMessages && !this.loadingRooms
         },
         showMessagesStarted() {
-            return this.messages.length && this.messagesLoaded
+            return this.messages.length && this.messagesLoaded && this.visibleViewport.head === 0
         },
         isMessageEmpty() {
             return !this.file && !this.message.trim()
         },
+        maxViewportLength() {
+            const w = window.visualViewport ? window.visualViewport : window
+            const height = w.height || w.innerHeight
+            return Math.ceil(height / 60) * 5
+        },
     },
     watch: {
         loadingMessages(val) {
-            if (val) this.infiniteState = null
-            else this.focusTextarea(true)
+            if (val) this.infiniteState.head = null
+            else if (!val) this.focusTextarea(true)
         },
         async room(newVal, oldVal) {
             if (newVal.roomId && newVal.roomId !== oldVal.roomId) {
                 this.loadingMessages = true
                 this.scrollIcon = false
                 this.scrollMessagesCount = 0
+                this.scrollingTolastMessage = 0
                 //this.resetMessage(true)
 
                 this.editAndResend = false
                 this.closeForwardPanel()
                 await this.updateGroupMembers()
+            } else if (newVal.roomId === 0) {
+                this.scrollIcon = false
+                this.scrollMessagesCount = 0
+                this.scrollingTolastMessage = 0
             }
         },
         messages(newVal, oldVal) {
             const element = this.$refs.scrollContainer
             if (!element) return
 
+            const offset = (newVal ? newVal.length : 0) - (oldVal ? oldVal.length : 0)
+            if (
+                oldVal &&
+                oldVal.length &&
+                newVal &&
+                newVal.length &&
+                oldVal[oldVal.length - 1]._id === newVal[newVal.length - 1]._id
+            ) {
+                const scrollTop = this.getTopScroll(element)
+                const scrollBottom = this.getBottomScroll(element)
+                if (scrollTop < scrollBottom) {
+                    this.visibleViewport.tail = Math.min(
+                        newVal.length,
+                        this.visibleViewport.head + this.maxViewportLength,
+                    )
+                }
+                if (scrollTop > scrollBottom) {
+                    this.visibleViewport.tail = Math.min(newVal.length, this.visibleViewport.tail + offset)
+                    this.visibleViewport.head = Math.max(0, this.visibleViewport.tail - this.maxViewportLength)
+                }
+            }
+            if (!oldVal || !oldVal.length || this.optimizeMethod === 'none') {
+                this.visibleViewport.head = 0
+                this.visibleViewport.tail = newVal.length
+            }
+
             if (oldVal && newVal && oldVal.length === newVal.length - 1) {
                 this.loadingMessages = false
 
-                if (newVal[newVal.length - 1].senderId === this.currentUserId || this.getBottomScroll(element) < 60) {
+                if (
+                    newVal[newVal.length - 1].senderId === this.currentUserId ||
+                    (this.getBottomScroll(element) < 60 &&
+                        (this.visibleViewport.tail === oldVal.length || this.optimizeMethod === 'none'))
+                ) {
+                    if (this.optimizeMethod !== 'none') {
+                        this.visibleViewport.tail = newVal.length
+                        this.visibleViewport.head = Math.max(0, this.visibleViewport.tail - this.maxViewportLength)
+                    }
                     return setTimeout(() => {
                         const options = { top: element.scrollHeight, behavior: 'smooth' }
                         element.scrollTo(options)
@@ -462,20 +584,36 @@ export default {
                 }
             }
 
-            if (this.infiniteState) {
-                this.infiniteState.loaded()
+            if (this.infiniteState.head) {
+                this.infiniteState.head.loaded()
             } else if (newVal.length && !this.scrollIcon) {
                 setTimeout(() => {
                     element.scrollTo({ top: element.scrollHeight })
                     this.loadingMessages = false
                 }, 0)
             }
-
-            setTimeout(() => (this.loadingMoreMessages = false), 0)
+            if (this.scrollingTolastMessage && newVal.length >= this.scrollingTolastMessage) {
+                const msgCount = this.scrollingTolastMessage
+                this.scrollingTolastMessage = 0
+                setTimeout(() => {
+                    const nonSystemMessages = newVal.filter((msg) => !msg.system)
+                    const _id = nonSystemMessages[nonSystemMessages.length - msgCount]._id
+                    if (!_id) {
+                        this.$message.error('Message not found')
+                        return
+                    }
+                    console.log('last unread message ID', _id)
+                    this.scrollToMessage(_id)
+                }, 0)
+            }
+            setTimeout(() => (this.loadingHeadMessages = false), 0)
         },
         messagesLoaded(val) {
             if (val) this.loadingMessages = false
-            if (this.infiniteState) this.infiniteState.complete()
+            if (this.infiniteState.head) {
+                if (this.optimizeMethod !== 'none') this.infiniteState.head.loaded()
+                else this.infiniteState.head.complete()
+            }
         },
     },
     async mounted() {
@@ -592,7 +730,10 @@ export default {
         })
     },
     async created() {
+        this.optimizeMethod = await ipc.getOptimizeMethodSetting()
+        if (this.$route.name === 'history-page') this.optimizeMethod = 'none'
         keyToSendMessage = await ipc.getKeyToSendMessage()
+        ipcRenderer.on('setOptimizeMethodSetting', (_, method) => (this.optimizeMethod = method))
         ipcRenderer.on('startForward', (_, _id) => {
             if (this.showForwardPanel) return
             this.selectedMessage = _id
@@ -609,6 +750,10 @@ export default {
         ipcRenderer.on('pasteGif', (_, GifURL) => {
             this.onPasteGif(GifURL)
             this.$emit('stickers-panel')
+        })
+        this.hideChatImageByDefault = await ipc.getHideChatImageByDefault()
+        ipcRenderer.on('setHideChatImageByDefault', (_, hideChatImageByDefault) => {
+            this.hideChatImageByDefault = hideChatImageByDefault
         })
     },
     methods: {
@@ -688,6 +833,56 @@ export default {
                 this.closeForwardPanel()
             }
             console.log('delMsgtoForward')
+        },
+        scrollToMessage(messageId) {
+            const judgeSameMessage = (a, b) => {
+                if (a === b) return true
+                const parsedA = Buffer.from(a, 'base64')
+                const parsedB = Buffer.from(b, 'base64')
+                if (this.roomId < 0) {
+                    for (let i = 0; i <= 16; i += 4) {
+                        if (i !== 12 && parsedA.readUInt32BE(i) !== parsedB.readUInt32BE(i)) return false
+                    }
+                    if (parsedA.readUInt8(20) !== parsedB.readUInt8(20)) return false
+                } else {
+                    for (let i = 0; i <= 12; i += 4) {
+                        if (i !== 8 && parsedA.readUInt32BE(i) !== parsedB.readUInt32BE(i)) return false
+                    }
+                    if (parsedA.readUInt8(16) !== parsedB.readUInt8(16)) return false
+                }
+                return true
+            }
+            const message = document.getElementById(messageId)
+            if (message) {
+                message.scrollIntoView({ behavior: 'smooth' })
+                return
+            } else {
+                const index = this.messages.findIndex((e) => judgeSameMessage(e._id, messageId))
+                if (index !== -1) {
+                    let head = index - Math.floor(this.maxViewportLength / 2)
+                    let tail = head + this.maxViewportLength
+                    if (head < 0) {
+                        head = 0
+                        tail = Math.min(this.maxViewportLength, this.messages.length)
+                    }
+                    if (tail > this.messages.length) {
+                        tail = this.messages.length
+                        head = Math.max(tail - this.maxViewportLength, 0)
+                    }
+                    if (this.optimizeMethod !== 'none') {
+                        this.visibleViewport.head = head
+                        this.visibleViewport.tail = tail
+                    }
+                    this.$nextTick(() => {
+                        const message = document.getElementById(this.messages[index]._id)
+                        if (message) {
+                            message.scrollIntoView()
+                        }
+                    })
+                    return
+                }
+            }
+            this.$message.error('被回复的消息太远啦')
         },
         onMediaLoad() {
             let height = this.$refs.mediaFile.clientHeight
@@ -809,8 +1004,8 @@ export default {
         async sendStructMessage(e) {
             const isJSON = (str) => {
                 try {
-                    if (typeof JSON.parse(str) == "object") return true
-                } catch (e) { }
+                    if (typeof JSON.parse(str) == 'object') return true
+                } catch (e) {}
                 return false
             }
             const debugmode = await ipc.getDebugSetting()
@@ -832,18 +1027,13 @@ export default {
 
             this.resetMessage(true)
         },
-        loadMoreMessages(infiniteState) {
+        loadMoreMessages() {
             setTimeout(
                 () => {
-                    if (this.loadingMoreMessages) return
-
-                    if (this.messagesLoaded || !this.room.roomId) {
-                        return infiniteState.complete()
-                    }
-
-                    this.infiniteState = infiniteState
+                    if (this.loadingHeadMessages) return
+                    if (!this.messages || this.messages.length === 0) return
                     this.$emit('fetch-messages')
-                    this.loadingMoreMessages = true
+                    this.loadingHeadMessages = true
                 },
                 // prevent scroll bouncing issue on iOS devices
                 iOSDevice() ? 500 : 0,
@@ -883,13 +1073,32 @@ export default {
 
             this.message = message.content
         },
+        getTopScroll(element) {
+            const { scrollTop } = element
+            return scrollTop
+        },
         getBottomScroll(element) {
             const { scrollHeight, clientHeight, scrollTop } = element
             return scrollHeight - clientHeight - scrollTop
         },
         scrollToBottom() {
             const element = this.$refs.scrollContainer
-            element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+            if (this.optimizeMethod !== 'none') {
+                this.visibleViewport.tail = this.messages.length
+                this.visibleViewport.head = Math.max(this.messages.length - this.maxViewportLength, 0)
+            }
+            this.$nextTick(() => {
+                element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+            })
+        },
+        async scrollToLastMessage() {
+            const lastUnreadCount = this.lastUnreadCount
+            if (lastUnreadCount === 0) return
+            const fetchNumber = Math.max(lastUnreadCount - this.messages.length, 0)
+            console.log('Need fetch messages: ', fetchNumber)
+            this.$emit('fetch-messages', false, fetchNumber)
+            this.$emit('clear-last-unread-count')
+            this.scrollingTolastMessage = lastUnreadCount
         },
         onChangeInput() {
             this.keepKeyboardOpen = true
@@ -981,13 +1190,89 @@ export default {
             ipc.popupAvatarMenu(message, this.room)
         },
         containerScroll(e) {
-            setTimeout(() => {
+            if (this.onScrolling) {
+                clearTimeout(this.onScrolling)
+                this.onScrolling = null
+            }
+            this.onScrolling = setTimeout(() => {
+                this.onScrolling = null
                 if (!e.target) return
 
                 const bottomScroll = this.getBottomScroll(e.target)
-                if (bottomScroll < 60) this.scrollMessagesCount = 0
+                if (bottomScroll < 60 && this.visibleViewport.tail >= this.messages.length) this.scrollMessagesCount = 0
                 this.scrollIcon = bottomScroll > 500 || this.scrollMessagesCount
-            }, 200)
+
+                const topScroll = this.getTopScroll(e.target)
+
+                const scrollDirection = this.lastScrollPosition.top ? topScroll - this.lastScrollPosition.top : 0
+                this.lastScrollPosition.top = topScroll
+
+                if (this.optimizeMethod !== 'scroll') return
+                if (topScroll < scrollOffset && scrollDirection <= 0) {
+                    if (this.visibleViewport.head === 0) this.$nextTick(() => this.loadMoreMessages())
+                    else {
+                        this.visibleViewport.head = Math.max(0, this.visibleViewport.head - 10)
+                        this.visibleViewport.tail = Math.max(
+                            this.visibleViewport.head + this.maxViewportLength,
+                            this.visibleViewport.tail - 10,
+                        )
+                    }
+                }
+                if (bottomScroll < scrollOffset && scrollDirection >= 0) {
+                    this.visibleViewport.tail = Math.min(this.visibleViewport.tail + 10, this.messages.length)
+                    this.visibleViewport.head = Math.max(0, this.visibleViewport.tail - this.maxViewportLength)
+                }
+                if (this.getTopScroll(e.target) <= 0) e.target.scrollTo({ top: 1 })
+                if (this.getBottomScroll(e.target) <= 0 && this.visibleViewport.tail !== this.messages.length)
+                    e.target.scrollTo({ top: e.target.scrollHeight - 1 - e.target.clientHeight })
+            }, 24)
+        },
+        loadHeadMessages(infiniteState) {
+            if (this.optimizeMethod !== 'infinite-loading') return
+            setTimeout(
+                () => {
+                    this.infiniteState.head = infiniteState
+                    if (this.loadingHeadMessages && this.visibleViewport.head === 0) return
+
+                    if ((this.messagesLoaded && this.visibleViewport.head === 0) || !this.room.roomId) {
+                        return infiniteState.loaded()
+                    }
+                    if (this.visibleViewport.head === 0) {
+                        this.$emit('fetch-messages')
+                        this.loadingHeadMessages = true
+                    } else {
+                        this.visibleViewport.head = Math.max(0, this.visibleViewport.head - 10)
+                        this.visibleViewport.tail = Math.max(
+                            this.visibleViewport.head + this.maxViewportLength,
+                            this.visibleViewport.tail - 10,
+                        )
+                        infiniteState.loaded()
+                    }
+                },
+                iOSDevice() ? 500 : 0,
+            )
+        },
+        loadTailMessages(infiniteState) {
+            if (this.optimizeMethod !== 'infinite-loading') return
+            this.visibleViewport.tail = Math.min(this.visibleViewport.tail + 10, this.messages.length)
+            this.visibleViewport.head = Math.max(0, this.visibleViewport.tail - this.maxViewportLength)
+            this.infiniteState.tail = infiniteState
+            infiniteState.loaded()
+        },
+        _loadMoreMessages(infiniteState) {
+            setTimeout(
+                () => {
+                    if (this.loadingHeadMessages) return
+                    if (this.messagesLoaded || !this.room.roomId) {
+                        return infiniteState.complete()
+                    }
+                    this.infiniteState.head = infiniteState
+                    this.$emit('fetch-messages')
+                    this.loadingHeadMessages = true
+                },
+                // prevent scroll bouncing issue on iOS devices
+                iOSDevice() ? 500 : 0,
+            )
         },
         textctx: ipc.popupTextAreaMenu,
         roomMenu() {
@@ -1067,6 +1352,28 @@ export default {
 
 .vac-infinite-loading {
     height: 68px;
+}
+
+.vac-infinite-loading-bottom {
+    height: 0px;
+}
+
+.vac-icon-last-message {
+    position: absolute;
+    top: 80px;
+    right: 20px;
+    padding: 8px;
+    background: var(--chat-bg-scroll-icon);
+    border-radius: 50%;
+    box-shadow: 0 1px 1px -1px rgba(0, 0, 0, 0.2), 0 1px 1px 0 rgba(0, 0, 0, 0.14), 0 1px 2px 0 rgba(0, 0, 0, 0.12);
+    display: flex;
+    cursor: pointer;
+    z-index: 10;
+
+    svg {
+        height: 25px;
+        width: 25px;
+    }
 }
 
 .vac-icon-scroll {
